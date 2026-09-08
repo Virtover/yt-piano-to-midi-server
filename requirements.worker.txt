@@ -1,0 +1,7 @@
+redis
+dramatiq[redis]
+pydantic-settings
+yt-dlp
+basic-pitch[tf]
+pretty-midi
+setuptools<81
