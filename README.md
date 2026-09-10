@@ -4,10 +4,19 @@ A small FastAPI service that downloads a YouTube piano performance, transcribes 
 
 ## Requirements
 
-- Docker Desktop with Docker Compose
+- Docker Desktop with Docker Compose and Linux containers enabled
+- NVIDIA drivers and NVIDIA Container Toolkit, because the worker runs in a CUDA image and requests all GPUs
 - A public YouTube URL containing an audio or piano performance
 
 The transcription worker needs `ffmpeg`, which is included in the worker image. Redis stores job state; generated files are stored in the shared `data` volume.
+
+The worker is configured for GPU execution through `gpus: all` in `docker-compose.yml`. Verify that Docker can access the GPU before starting the stack:
+
+```powershell
+docker run --rm --gpus all nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04 nvidia-smi
+```
+
+If you do not have an NVIDIA GPU, remove `gpus: all` from the worker service and expect transcription to run more slowly. The CUDA-based worker image may still require additional CPU-only dependency changes depending on the host.
 
 ## Run locally with Docker
 
@@ -15,6 +24,8 @@ The transcription worker needs `ffmpeg`, which is included in the worker image. 
 Copy-Item .env.example .env
 docker compose up --build
 ```
+
+The included `.env.example` is already configured for Docker Compose. Keep `REDIS_URL` set to `redis://redis:6379/0` and `DATA_DIR` set to `/data` unless the Compose file is changed to use different service or volume settings. Do not commit local secrets or machine-specific values from `.env`.
 
 The API is available at `http://localhost:8000`. Interactive API documentation is at `http://localhost:8000/docs`.
 
@@ -47,6 +58,17 @@ Invoke-RestMethod "http://localhost:8000/api/transcriptions/$($job.job_id)"
 ```
 
 The status response contains `status`, `progress` from `0` to `1`, and an `error` field when processing fails. Possible statuses are `queued`, `processing`, `completed`, and `failed`.
+
+Poll until the status is `completed` or `failed`:
+
+```powershell
+do {
+  $status = Invoke-RestMethod "http://localhost:8000/api/transcriptions/$($job.job_id)"
+  $status
+  if ($status.status -in @('completed', 'failed')) { break }
+  Start-Sleep -Seconds 2
+} while ($true)
+```
 
 ### Download MIDI
 
@@ -87,6 +109,7 @@ Install `requirements.api.txt` for API-only development or `requirements.worker.
 - `app/api/routes/transcriptions.py`: job creation, status polling, and MIDI download
 - `app/worker/tasks.py`: Redis-backed Dramatiq task and job state updates
 - `app/transcription/pipeline.py`: YouTube download and Basic Pitch transcription
+- `app/transcription/piano_transcription.py`: piano transcription model integration
 - `docker-compose.yml`: API, worker, Redis, and shared storage
 
 ## Limitations
