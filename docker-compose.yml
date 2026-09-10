@@ -24,6 +24,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    gpus: all
 
   redis:
     image: redis:7-alpine

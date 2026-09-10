@@ -2,13 +2,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from basic_pitch.inference import (
-    ICASSP_2022_MODEL_PATH,
-    predict_and_save,
-)
-
-from app.transcription.midi_cleanup import (
-    merge_fragmented_notes,
+from app.transcription.piano_transcription import (
+    transcribe_piano,
 )
 
 
@@ -19,7 +14,9 @@ def download_audio(
     youtube_url: str,
     output_dir: Path,
 ) -> Path:
-    output_template = str(output_dir / "audio.%(ext)s")
+    output_template = str(
+        output_dir / "audio.%(ext)s"
+    )
 
     subprocess.run(
         [
@@ -55,12 +52,12 @@ def transcribe_youtube(
         exist_ok=True,
     )
 
-    if progress_callback:
-        progress_callback(0.05)
-
     # ---------------------------------------------------------
     # Download audio
     # ---------------------------------------------------------
+
+    if progress_callback:
+        progress_callback(0.05)
 
     audio_path = download_audio(
         youtube_url,
@@ -71,76 +68,36 @@ def transcribe_youtube(
         progress_callback(0.25)
 
     # ---------------------------------------------------------
-    # Basic Pitch
+    # Piano transcription
     # ---------------------------------------------------------
 
-    midi_dir = output_dir / "midi"
-
-    midi_dir.mkdir(
-        parents=True,
-        exist_ok=True,
+    midi_path = (
+        output_dir / "transcription.mid"
     )
 
-    predict_and_save(
-        [str(audio_path)],
-        str(midi_dir),
-
-        save_midi=True,
-        sonify_midi=False,
-        save_model_outputs=False,
-        save_notes=True,
-
-        model_or_model_path=ICASSP_2022_MODEL_PATH,
-
-        # Basic Pitch parameters
-        onset_threshold=0.5,
-        frame_threshold=0.3,
-        minimum_note_length=127.7,
-    )
-
-    if progress_callback:
-        progress_callback(0.85)
-
-    # ---------------------------------------------------------
-    # Find generated MIDI
-    # ---------------------------------------------------------
-
-    midi_files = list(
-        midi_dir.glob("*.mid")
-    )
-
-    if not midi_files:
-        raise RuntimeError(
-            "Basic Pitch did not produce a MIDI file"
-        )
-
-    # Basic Pitch normally creates one MIDI file
-    # for the input audio.
-    midi_path = midi_files[0]
-
-    # ---------------------------------------------------------
-    # Clean up fragmented notes
-    # ---------------------------------------------------------
-
-    merge_fragmented_notes(
-        midi_path,
-        max_gap=0.05,
+    transcribe_piano(
+        audio_path=audio_path,
+        output_path=midi_path,
     )
 
     if progress_callback:
         progress_callback(0.95)
 
     # ---------------------------------------------------------
-    # Move final result
+    # Verify result
     # ---------------------------------------------------------
 
-    final_path = (
-        output_dir / "transcription.mid"
-    )
+    if not midi_path.exists():
+        raise RuntimeError(
+            "Piano transcription did not produce a MIDI file"
+        )
 
-    midi_path.replace(final_path)
+    if midi_path.stat().st_size == 0:
+        raise RuntimeError(
+            "Piano transcription produced an empty MIDI file"
+        )
 
     if progress_callback:
         progress_callback(1.0)
 
-    return final_path
+    return midi_path
