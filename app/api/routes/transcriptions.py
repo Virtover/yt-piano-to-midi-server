@@ -37,6 +37,7 @@ class TranscriptionStatusResponse(BaseModel):
     job_id: str
     status: str
     progress: float = Field(ge=0, le=1)
+    title: str | None = None
     error: str | None = None
 
 
@@ -60,7 +61,10 @@ def create_transcription(
     )
 
     try:
-        transcribe_job.send(job_id, str(request.youtube_url))
+        transcribe_job.send(
+            job_id,
+            str(request.youtube_url),
+        )
     except Exception as error:
         redis.delete(job_key(job_id))
         raise HTTPException(
@@ -74,7 +78,10 @@ def create_transcription(
     )
 
 
-@router.get("/{job_id}", response_model=TranscriptionStatusResponse)
+@router.get(
+    "/{job_id}",
+    response_model=TranscriptionStatusResponse,
+)
 def get_transcription(job_id: str):
     job = redis.hgetall(job_key(job_id))
 
@@ -93,6 +100,7 @@ def get_transcription(job_id: str):
         job_id=job_id,
         status=job.get("status", "unknown"),
         progress=max(0, min(1, progress)),
+        title=job.get("title"),
         error=job.get("error"),
     )
 
@@ -116,17 +124,27 @@ def get_midi(job_id: str):
     path = job.get("result")
 
     if not path:
-        raise HTTPException(status_code=500, detail="Result path missing")
+        raise HTTPException(
+            status_code=500,
+            detail="Result path missing",
+        )
 
     result_path = Path(path)
     data_root = Path(settings.data_dir).resolve()
+
     try:
         result_path.resolve().relative_to(data_root)
     except ValueError as error:
-        raise HTTPException(status_code=500, detail="Invalid result path") from error
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid result path",
+        ) from error
 
     if not result_path.is_file():
-        raise HTTPException(status_code=404, detail="MIDI result is no longer available")
+        raise HTTPException(
+            status_code=404,
+            detail="MIDI result is no longer available",
+        )
 
     return FileResponse(
         result_path,

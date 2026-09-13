@@ -61,7 +61,9 @@ def cleanup_expired_jobs():
 @dramatiq.actor
 def transcribe_job(job_id: str, youtube_url: str):
     try:
-        from app.transcription.pipeline import transcribe_youtube
+        from app.transcription.pipeline import (
+            transcribe_youtube,
+        )
 
         update_job(
             job_id,
@@ -86,10 +88,17 @@ def transcribe_job(job_id: str, youtube_url: str):
                 progress=str(value),
             )
 
+        def title(value: str):
+            update_job(
+                job_id,
+                title=value,
+            )
+
         midi_path = transcribe_youtube(
             youtube_url=youtube_url,
             output_dir=output_dir,
             progress_callback=progress,
+            title_callback=title,
         )
 
         update_job(
