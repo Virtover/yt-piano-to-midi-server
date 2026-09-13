@@ -7,7 +7,9 @@ The transcription uses a dedicated piano transcription model with CUDA support w
 ## Requirements
 
 * Docker Desktop with Docker Compose and Linux containers enabled
+
 * NVIDIA drivers and NVIDIA Container Toolkit, because the transcription worker uses a CUDA image and requests all GPUs
+
 * A public YouTube URL containing an audio or piano performance
 
 The transcription worker needs `ffmpeg`, which is included in the worker image.
@@ -79,19 +81,36 @@ The endpoint returns `202 Accepted` with a `job_id` and an initial `queued` stat
 
 The URL must be an HTTP(S) URL.
 
-The worker downloads the audio and runs the piano transcription model. Processing time depends on the track length and available hardware.
+The worker downloads the audio, retrieves the YouTube video title, and runs the piano transcription model. Processing time depends on the track length and available hardware.
 
 ### Poll status
 
 ```powershell
-Invoke-RestMethod "http://localhost:8000/api/transcriptions/$($job.job_id)"
+Invoke-RestMethod `
+  "http://localhost:8000/api/transcriptions/$($job.job_id)"
 ```
 
 The status response contains:
 
+* `job_id`
 * `status`
 * `progress` from `0` to `1`
+* `title` — the YouTube video title, once retrieved
 * `error` when processing fails
+
+Example:
+
+```json
+{
+  "job_id": "c203c265-fac5-467e-bab9-53321a1f4488",
+  "status": "processing",
+  "progress": 0.42,
+  "title": "River Flows in You - Yiruma",
+  "error": null
+}
+```
+
+The title is retrieved during the audio download and may therefore become available while the transcription is still processing.
 
 Possible statuses are:
 
@@ -115,6 +134,18 @@ do {
 
     Start-Sleep -Seconds 2
 } while ($true)
+```
+
+A completed response looks like:
+
+```json
+{
+  "job_id": "c203c265-fac5-467e-bab9-53321a1f4488",
+  "status": "completed",
+  "progress": 1.0,
+  "title": "River Flows in You - Yiruma",
+  "error": null
+}
 ```
 
 ### Download MIDI
@@ -219,18 +250,24 @@ Running the complete stack with Docker is recommended because the worker also re
                            │
                     ┌──────┴───────┐
                     │   Cleanup    │
-                    │   service    │
+                    │    service   │
                     └──────────────┘
 ```
 
 ### Components
 
 * `app/main.py` — FastAPI application and health endpoints
+
 * `app/api/routes/transcriptions.py` — job creation, status polling, and MIDI download
+
 * `app/worker/tasks.py` — Dramatiq transcription task, Redis job state, and cleanup logic
+
 * `app/worker/cleanup.py` — periodic cleanup process
-* `app/transcription/pipeline.py` — YouTube audio download and transcription pipeline
+
+* `app/transcription/pipeline.py` — YouTube audio download, video metadata retrieval, and transcription pipeline
+
 * `app/transcription/piano_transcription.py` — piano transcription model integration
+
 * `docker-compose.yml` — API, worker, cleanup, Redis, and shared storage
 
 ## Limitations
@@ -241,4 +278,6 @@ Transcription quality depends heavily on the source recording. Dense arrangement
 
 The generated MIDI may require manual cleanup before being used as a final piano arrangement.
 
-The current API accepts a YouTube URL and returns a MIDI file; it does not yet provide interactive editing, sheet-music generation, playback controls, or MIDI performance feedback.
+The current API accepts a YouTube URL and returns a MIDI file. It also exposes the YouTube video title through the transcription status endpoint.
+
+It does not yet provide interactive editing, sheet-music generation, playback controls, or MIDI performance feedback.
