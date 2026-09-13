@@ -78,6 +78,7 @@ def transcribe_youtube(
     transcribe_piano(
         audio_path=audio_path,
         output_path=midi_path,
+        progress_callback=progress_callback,
     )
 
     if progress_callback:
