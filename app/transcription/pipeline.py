@@ -24,7 +24,7 @@ def download_audio(
     output_dir: Path,
 ) -> DownloadedAudio:
     output_template = str(
-        output_dir / "audio.%(ext)s"
+        output_dir / "download.%(ext)s"
     )
 
     result = subprocess.run(
@@ -43,9 +43,6 @@ def download_audio(
         text=True,
     )
 
-    # --print-json prints the video metadata as JSON.
-    # Take the last non-empty line in case yt-dlp prints
-    # additional output.
     json_lines = [
         line
         for line in result.stdout.splitlines()
@@ -71,12 +68,38 @@ def download_audio(
             "yt-dlp did not return a video title"
         )
 
+    downloaded_path = None
+
+    for path in output_dir.glob("download.*"):
+        if path.suffix.lower() == ".wav":
+            downloaded_path = path
+            break
+
+    if downloaded_path is None:
+        raise RuntimeError(
+            "yt-dlp did not produce a WAV file"
+        )
+
     wav_path = output_dir / "audio.wav"
 
-    if not wav_path.exists():
-        raise RuntimeError(
-            "yt-dlp did not produce audio.wav"
-        )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(downloaded_path),
+            "-ar",
+            "44100",
+            "-ac",
+            "1",
+            str(wav_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    downloaded_path.unlink()
 
     return DownloadedAudio(
         path=wav_path,
@@ -90,15 +113,10 @@ def transcribe_youtube(
     progress_callback: ProgressCallback | None = None,
     title_callback: TitleCallback | None = None,
 ) -> Path:
-
     output_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
-
-    # ---------------------------------------------------------
-    # Download audio
-    # ---------------------------------------------------------
 
     if progress_callback:
         progress_callback(0.05)
@@ -109,17 +127,13 @@ def transcribe_youtube(
     )
 
     if title_callback:
-        title_callback(downloaded.title)
-
-    if progress_callback:
-        progress_callback(0.25)
-
-    # ---------------------------------------------------------
-    # Piano transcription
-    # ---------------------------------------------------------
+        title_callback(
+            downloaded.title
+        )
 
     midi_path = (
-        output_dir / "transcription.mid"
+        output_dir
+        / "transcription.mid"
     )
 
     transcribe_piano(
@@ -128,21 +142,16 @@ def transcribe_youtube(
         progress_callback=progress_callback,
     )
 
-    if progress_callback:
-        progress_callback(0.95)
-
-    # ---------------------------------------------------------
-    # Verify result
-    # ---------------------------------------------------------
-
     if not midi_path.exists():
         raise RuntimeError(
-            "Piano transcription did not produce a MIDI file"
+            "Piano transcription did not "
+            "produce a MIDI file"
         )
 
     if midi_path.stat().st_size == 0:
         raise RuntimeError(
-            "Piano transcription produced an empty MIDI file"
+            "Piano transcription produced "
+            "an empty MIDI file"
         )
 
     if progress_callback:

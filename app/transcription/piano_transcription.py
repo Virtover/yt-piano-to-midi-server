@@ -1,69 +1,352 @@
+import math
+from collections import defaultdict
 from pathlib import Path
-from urllib.request import urlretrieve
+from typing import Callable
 
-import librosa
+import moduleconf
 import numpy as np
+import pkg_resources
+import pydub
+import soxr
 import torch
+import torch.nn.functional as F
 
-from piano_transcription_inference import (
-    PianoTranscription,
-    sample_rate,
-)
-from piano_transcription_inference.pytorch_utils import (
-    move_data_to_device,
-)
-from piano_transcription_inference.utilities import (
-    RegressionPostProcessor,
-    write_events_to_midi,
+from transkun.Data import writeMidi
+from transkun.ModelTransformer import (
+    makeFrame,
+    resolveOverlapping,
 )
 
 
-CHECKPOINT_DIR = Path("/data/models")
+ProgressCallback = Callable[[float], None]
 
-CHECKPOINT_PATH = (
-    CHECKPOINT_DIR
-    / "note_F1=0.9677_pedal_F1=0.9186.pth"
-)
 
-CHECKPOINT_URL = (
-    "https://huggingface.co/xavriley/midi-transcription-models/"
-    "resolve/main/note_F1%3D0.9677_pedal_F1%3D0.9186.pth"
-)
+def read_audio(
+    path: Path,
+) -> tuple[int, np.ndarray]:
+    audio = pydub.AudioSegment.from_file(path)
 
-# Same model behavior as the upstream implementation.
-SEGMENT_SAMPLES = 16000 * 10
+    samples = np.array(
+        audio.get_array_of_samples()
+    )
 
-# Keep this at 1 initially.
-# The upstream implementation also uses batch_size=1.
-INFERENCE_BATCH_SIZE = 1
+    samples = samples.reshape(
+        -1,
+        audio.channels,
+    )
+
+    samples = (
+        np.float32(samples)
+        / 2**15
+    )
+
+    return audio.frame_rate, samples
+
+
+def load_model(device: str):
+    weight_path = pkg_resources.resource_filename(
+        "transkun",
+        "pretrained/2.0.pt",
+    )
+
+    conf_path = pkg_resources.resource_filename(
+        "transkun",
+        "pretrained/2.0.conf",
+    )
+
+    conf_manager = moduleconf.parseFromFile(
+        conf_path
+    )
+
+    TransKun = conf_manager[
+        "Model"
+    ].module.TransKun
+
+    conf = conf_manager[
+        "Model"
+    ].config
+
+    checkpoint = torch.load(
+        weight_path,
+        map_location=device,
+    )
+
+    model = TransKun(
+        conf=conf,
+    ).to(device)
+
+    if "best_state_dict" in checkpoint:
+        model.load_state_dict(
+            checkpoint["best_state_dict"],
+            strict=False,
+        )
+    else:
+        model.load_state_dict(
+            checkpoint["state_dict"],
+            strict=False,
+        )
+
+    model.eval()
+
+    return model
+
+
+def transcribe_audio(
+    model,
+    audio: np.ndarray,
+    progress_callback: ProgressCallback | None = None,
+):
+    """
+    Transcribe audio using the same segment processing logic
+    as Transkun's TransKun.transcribe().
+
+    Progress is reported after each actual segment has finished.
+    """
+
+    step_in_second = (
+        model.segmentHopSizeInSecond
+    )
+
+    segment_size_in_second = (
+        model.segmentSizeInSecond
+    )
+
+    device = next(
+        model.parameters()
+    ).device
+
+    # Transkun expects:
+    #
+    #     channels x samples
+    #
+    x = torch.from_numpy(audio).to(device)
+    x = x.transpose(-1, -2)
+
+    pad_time_begin = (
+        segment_size_in_second
+        - step_in_second
+    )
+
+    x = F.pad(
+        x,
+        (
+            math.ceil(
+                pad_time_begin * model.fs
+            ),
+            math.ceil(
+                pad_time_begin * model.fs
+            ),
+        ),
+    )
+
+    n_sample = x.shape[-1]
+
+    step_size = (
+        math.ceil(
+            step_in_second
+            * model.fs
+            / model.hopSize
+        )
+        * model.hopSize
+    )
+
+    segment_size = math.ceil(
+        segment_size_in_second
+        * model.fs
+    )
+
+    segment_starts = range(
+        0,
+        n_sample,
+        step_size,
+    )
+
+    segment_count = math.ceil(
+        n_sample / step_size
+    )
+
+    events_by_type = defaultdict(list)
+
+    start_frame_idx = math.floor(
+        pad_time_begin
+        * model.fs
+        / model.hopSize
+    )
+
+    start_pos = [
+        start_frame_idx
+    ] * len(model.targetMIDIPitch)
+
+    torch.set_grad_enabled(False)
+
+    for segment_index, i in enumerate(
+        segment_starts,
+        start=1,
+    ):
+        # Report progress BEFORE starting the expensive
+        # inference for this segment.
+        #
+        # This is important: otherwise the UI appears frozen
+        # during the first/only segment.
+        if progress_callback:
+            progress_callback(
+                (segment_index - 1)
+                / segment_count
+            )
+
+        j = min(
+            i + segment_size,
+            n_sample,
+        )
+
+        begin_time = (
+            i / model.fs
+            - pad_time_begin
+        )
+
+        cur_slice = x[:, i:j]
+
+        if (
+            cur_slice.shape[-1]
+            < segment_size
+        ):
+            cur_slice = F.pad(
+                cur_slice,
+                (
+                    0,
+                    segment_size
+                    - cur_slice.shape[-1],
+                ),
+            )
+
+        cur_frames = makeFrame(
+            cur_slice,
+            model.hopSize,
+            model.windowSize,
+        )
+
+        last_frame_idx = round(
+            segment_size
+            / model.hopSize
+        )
+
+        cur_events, last_p = (
+            model.transcribeFrames(
+                cur_frames.unsqueeze(0),
+                forcedStartPos=start_pos,
+                velocityCriteron="hamming",
+                onsetBound=None,
+                lastFrameIdx=last_frame_idx,
+            )
+        )
+
+        cur_events = cur_events[0]
+
+        start_pos = [
+            max(
+                k
+                - int(
+                    step_size
+                    / model.hopSize
+                ),
+                0,
+            )
+            for k in last_p
+        ]
+
+        for event in cur_events:
+            event.start += begin_time
+            event.end += begin_time
+
+            event.start = max(
+                event.start,
+                0,
+            )
+
+            event.end = max(
+                event.end,
+                event.start,
+            )
+
+        # This is the same merging logic used by
+        # Transkun's original transcribe().
+        for event in cur_events:
+            pitch = event.pitch
+
+            if events_by_type[pitch]:
+                last_event = (
+                    events_by_type[pitch][-1]
+                )
+
+                if event.start < last_event.end:
+                    if event.hasOnset:
+                        events_by_type[pitch][-1] = (
+                            event
+                        )
+                    else:
+                        last_event.hasOffset = (
+                            event.hasOffset
+                        )
+
+                        last_event.end = max(
+                            event.end,
+                            last_event.end,
+                        )
+
+                    continue
+
+            if event.hasOnset:
+                events_by_type[pitch].append(
+                    event
+                )
+
+        # Segment is now completely processed.
+        if progress_callback:
+            progress_callback(
+                segment_index
+                / segment_count
+            )
+
+    # Same final-event handling as Transkun.
+    for event_type in events_by_type:
+        if events_by_type[event_type]:
+            events_by_type[event_type][
+                -1
+            ].hasOffset = True
+
+    events_all = sum(
+        events_by_type.values(),
+        [],
+    )
+
+    events_all = [
+        event
+        for event in events_all
+        if event.hasOffset
+    ]
+
+    events_all = resolveOverlapping(
+        events_all
+    )
+
+    return events_all
 
 
 def transcribe_piano(
     audio_path: Path,
     output_path: Path,
-    progress_callback=None,
-) -> Path:
+    progress_callback: ProgressCallback | None = None,
+):
+    """
+    Transcribe one WAV file to MIDI.
 
-    CHECKPOINT_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    Progress range:
 
-    # ---------------------------------------------------------
-    # Checkpoint
-    # ---------------------------------------------------------
-
-    if not CHECKPOINT_PATH.exists():
-        print("Downloading piano transcription checkpoint...")
-
-        urlretrieve(
-            CHECKPOINT_URL,
-            CHECKPOINT_PATH,
-        )
-
-    # ---------------------------------------------------------
-    # Device
-    # ---------------------------------------------------------
+        0.00 - 0.10   model loading
+        0.10 - 0.15   audio loading
+        0.15 - 0.95   Transkun segment processing
+        0.95 - 1.00   MIDI writing
+    """
 
     device = (
         "cuda"
@@ -71,217 +354,58 @@ def transcribe_piano(
         else "cpu"
     )
 
-    print(f"Using {device} for inference")
+    if progress_callback:
+        progress_callback(0.02)
 
-    # ---------------------------------------------------------
-    # Load audio
-    # ---------------------------------------------------------
-
-    audio, _ = librosa.load(
-        str(audio_path),
-        sr=sample_rate,
-        mono=True,
-    )
+    model = load_model(device)
 
     if progress_callback:
-        progress_callback(0.30)
+        progress_callback(0.10)
 
-    # ---------------------------------------------------------
-    # Create transcriptor
-    # ---------------------------------------------------------
-
-    transcriptor = PianoTranscription(
-        device=device,
-        checkpoint_path=str(CHECKPOINT_PATH),
+    sample_rate, audio = read_audio(
+        audio_path
     )
 
-    if progress_callback:
-        progress_callback(0.35)
-
-    # ---------------------------------------------------------
-    # Prepare audio exactly like the upstream implementation
-    # ---------------------------------------------------------
-
-    audio = audio[None, :]
-
-    audio_len = audio.shape[1]
-
-    pad_len = (
-        int(np.ceil(audio_len / SEGMENT_SAMPLES))
-        * SEGMENT_SAMPLES
-        - audio_len
-    )
-
-    audio = np.concatenate(
-        (
+    if sample_rate != model.fs:
+        audio = soxr.resample(
             audio,
-            np.zeros((1, pad_len)),
-        ),
-        axis=1,
-    )
+            sample_rate,
+            model.fs,
+        )
 
-    segments = transcriptor.enframe(
-        audio,
-        SEGMENT_SAMPLES,
-    )
+    if progress_callback:
+        progress_callback(0.15)
 
-    total_segments = segments.shape[0]
-
-    print(
-        f"Transcribing {total_segments} segments"
-    )
-
-    # ---------------------------------------------------------
-    # Run inference segment by segment
-    # ---------------------------------------------------------
-
-    output_chunks = []
-
-    device = next(
-        transcriptor.model.parameters()
-    ).device
-
-    for start in range(
-        0,
-        total_segments,
-        INFERENCE_BATCH_SIZE,
+    def report_progress(
+        segment_progress: float,
     ):
-        end = min(
-            start + INFERENCE_BATCH_SIZE,
-            total_segments,
-        )
-
-        batch = segments[start:end]
-
-        batch_tensor = move_data_to_device(
-            batch,
-            device,
-        )
-
-        with torch.no_grad():
-            transcriptor.model.eval()
-
-            batch_output = transcriptor.model(
-                batch_tensor
-            )
-
-        batch_output = {
-            key: value.detach()
-            .cpu()
-            .numpy()
-            for key, value in batch_output.items()
-        }
-
-        if not output_chunks:
-            output_chunks = {
-                key: []
-                for key in batch_output
-            }
-
-        for key, value in batch_output.items():
-            output_chunks[key].append(value)
-
-        completed = end
-
-        inference_progress = (
-            completed / total_segments
-        )
-
-        # Inference occupies 35% -> 85%.
         progress = (
-            0.35
-            + inference_progress * 0.50
+            0.15
+            + 0.80 * segment_progress
         )
 
         if progress_callback:
-            progress_callback(progress)
+            progress_callback(
+                max(
+                    0.15,
+                    min(progress, 0.95),
+                )
+            )
 
-        print(
-            f"Inference: "
-            f"{completed}/{total_segments} "
-            f"({inference_progress * 100:.1f}%)"
-        )
-
-    # ---------------------------------------------------------
-    # Combine segment outputs
-    # ---------------------------------------------------------
-
-    output_dict = {
-        key: np.concatenate(
-            values,
-            axis=0,
-        )
-        for key, values in output_chunks.items()
-    }
-
-    # ---------------------------------------------------------
-    # Deframe
-    # ---------------------------------------------------------
-
-    for key in output_dict:
-        output_dict[key] = (
-            transcriptor.deframe(
-                output_dict[key]
-            )[0:audio_len]
-        )
-
-    if progress_callback:
-        progress_callback(0.88)
-
-    # ---------------------------------------------------------
-    # Post-processing
-    # ---------------------------------------------------------
-
-    post_processor = RegressionPostProcessor(
-        transcriptor.frames_per_second,
-        classes_num=transcriptor.classes_num,
-        onset_threshold=transcriptor.onset_threshold,
-        offset_threshold=transcriptor.offset_threshod,
-        frame_threshold=transcriptor.frame_threshold,
-        pedal_offset_threshold=(
-            transcriptor.pedal_offset_threshold
-        ),
-    )
-
-    (
-        est_note_events,
-        est_pedal_events,
-    ) = post_processor.output_dict_to_midi_events(
-        output_dict
+    events = transcribe_audio(
+        model=model,
+        audio=audio,
+        progress_callback=report_progress,
     )
 
     if progress_callback:
-        progress_callback(0.93)
+        progress_callback(0.96)
 
-    # ---------------------------------------------------------
-    # Write MIDI
-    # ---------------------------------------------------------
+    output_midi = writeMidi(events)
 
-    write_events_to_midi(
-        start_time=0,
-        note_events=est_note_events,
-        pedal_events=est_pedal_events,
-        midi_path=str(output_path),
+    output_midi.write(
+        str(output_path)
     )
-
-    if progress_callback:
-        progress_callback(0.98)
-
-    # ---------------------------------------------------------
-    # Verify
-    # ---------------------------------------------------------
-
-    if not output_path.exists():
-        raise RuntimeError(
-            "Piano transcription did not produce a MIDI file"
-        )
-
-    if output_path.stat().st_size == 0:
-        raise RuntimeError(
-            "Piano transcription produced an empty MIDI file"
-        )
 
     if progress_callback:
         progress_callback(1.0)
-
-    return output_path

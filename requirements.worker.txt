@@ -2,6 +2,6 @@ redis
 dramatiq[redis]
 pydantic-settings
 yt-dlp
-piano-transcription-inference
 torch
 torchaudio
+transkun

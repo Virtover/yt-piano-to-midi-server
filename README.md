@@ -2,14 +2,14 @@
 
 A small FastAPI service that downloads a YouTube piano performance, transcribes it to MIDI asynchronously, and returns the resulting MIDI file.
 
-The transcription uses a dedicated piano transcription model with CUDA support when an NVIDIA GPU is available.
+The transcription uses [Transkun](https://github.com/Yujia-Yan/Transkun), a neural audio-to-MIDI transcription model with GPU acceleration through PyTorch/CUDA.
+
+The Transkun checkpoint used by the service detects sustain-pedal events separately rather than extending note durations according to the pedal. This is useful for preserving the distinction between actual key holds and notes sounding under the sustain pedal.
 
 ## Requirements
 
 * Docker Desktop with Docker Compose and Linux containers enabled
-
-* NVIDIA drivers and NVIDIA Container Toolkit, because the transcription worker uses a CUDA image and requests all GPUs
-
+* NVIDIA drivers and NVIDIA Container Toolkit, if using the GPU configuration
 * A public YouTube URL containing an audio or piano performance
 
 The transcription worker needs `ffmpeg`, which is included in the worker image.
@@ -24,7 +24,9 @@ Verify that Docker can access the GPU before starting the stack:
 docker run --rm --gpus all nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04 nvidia-smi
 ```
 
-If you do not have an NVIDIA GPU, remove `gpus: all` from the worker service and expect transcription to run more slowly. The CUDA-based worker image may still require additional CPU-only dependency changes depending on the host.
+The worker automatically selects CUDA when PyTorch detects an available NVIDIA GPU and otherwise falls back to CPU.
+
+CPU execution is significantly slower and may require removing `gpus: all` from the worker service if GPU support is not available.
 
 ## Run locally with Docker
 
@@ -81,7 +83,7 @@ The endpoint returns `202 Accepted` with a `job_id` and an initial `queued` stat
 
 The URL must be an HTTP(S) URL.
 
-The worker downloads the audio, retrieves the YouTube video title, and runs the piano transcription model. Processing time depends on the track length and available hardware.
+The worker downloads the audio, retrieves the YouTube video title, and runs Transkun. Processing time depends on the track length and available hardware.
 
 ### Poll status
 
@@ -148,6 +150,8 @@ A completed response looks like:
 }
 ```
 
+Progress is reported by the transcription pipeline. The Transkun command itself does not currently expose exact per-segment progress, so the progress reported while Transkun is running is an estimate rather than an exact measure of completed model computation.
+
 ### Download MIDI
 
 After the status is `completed`:
@@ -164,6 +168,8 @@ The download endpoint returns:
 * `404` for an unknown job or missing result
 * `500` if the stored result metadata is invalid
 
+The generated MIDI contains both detected note events and detected MIDI control-change events, including sustain-pedal events (`CC64`) when detected by the model.
+
 Completed and failed jobs are retained for a limited time and are then automatically removed.
 
 ## Configuration
@@ -178,6 +184,46 @@ Settings are read from environment variables or `.env`:
 Docker Compose overrides these values to use the Redis service and the shared `/data` volume.
 
 The API, worker, and cleanup service must use the same `DATA_DIR`.
+
+## Transcription
+
+The transcription pipeline consists of:
+
+1. Downloading the audio from YouTube using `yt-dlp`
+2. Extracting the YouTube video title
+3. Converting the audio to WAV
+4. Running Transkun
+5. Writing the resulting MIDI file
+6. Returning the MIDI through the API
+
+The worker uses CUDA when available:
+
+```text
+NVIDIA GPU
+    │
+    ▼
+PyTorch / CUDA
+    │
+    ▼
+Transkun
+    │
+    ▼
+MIDI
+```
+
+When CUDA is unavailable, the transcription falls back to CPU.
+
+Transkun processes the audio in overlapping segments. The current configuration uses a 20-second segment size with a 10-second hop.
+
+The resulting MIDI can contain:
+
+* piano note events
+* note velocities
+* note onset and offset information
+* sustain-pedal events (`CC64`)
+* other detected MIDI control events
+
+The Transkun checkpoint used by the service is intended to keep sustain-pedal events separate from note durations. Therefore, a note sounding while the sustain pedal is held should not automatically become a long MIDI note whose duration extends until pedal release.
 
 ## Job cleanup
 
@@ -207,12 +253,13 @@ python -m compileall -q app
 
 Install `requirements.api.txt` for API-only development or `requirements.worker.txt` for transcription-worker development.
 
-Running the complete stack with Docker is recommended because the worker also requires:
+Running the complete stack with Docker is recommended because the worker requires:
 
 * `ffmpeg`
 * Redis
-* the piano transcription model
-* PyTorch with CUDA support when using the GPU configuration
+* Transkun
+* PyTorch
+* CUDA support when using the GPU configuration
 
 ## Architecture
 
@@ -238,7 +285,7 @@ Running the complete stack with Docker is recommended because the worker also re
                            ▼
                     ┌──────────────┐
                     │    Worker    │
-                    │    CUDA      │
+                    │ Transkun/CUDA│
                     └──────┬───────┘
                            │
                            ▼
@@ -250,34 +297,39 @@ Running the complete stack with Docker is recommended because the worker also re
                            │
                     ┌──────┴───────┐
                     │   Cleanup    │
-                    │    service   │
+                    │   service    │
                     └──────────────┘
 ```
 
 ### Components
 
 * `app/main.py` — FastAPI application and health endpoints
-
 * `app/api/routes/transcriptions.py` — job creation, status polling, and MIDI download
-
-* `app/worker/tasks.py` — Dramatiq transcription task, Redis job state, and cleanup logic
-
+* `app/worker/tasks.py` — Dramatiq transcription task and Redis job state
 * `app/worker/cleanup.py` — periodic cleanup process
-
-* `app/transcription/pipeline.py` — YouTube audio download, video metadata retrieval, and transcription pipeline
-
-* `app/transcription/piano_transcription.py` — piano transcription model integration
-
+* `app/transcription/pipeline.py` — YouTube audio download, metadata retrieval, and transcription pipeline
+* `app/transcription/piano_transcription.py` — Transkun integration
 * `docker-compose.yml` — API, worker, cleanup, Redis, and shared storage
+* `Dockerfile.api` — API container image
+* `Dockerfile.worker` — CUDA-enabled transcription worker image
 
 ## Limitations
 
 This is an asynchronous transcription service, not a sheet-music editor.
 
-Transcription quality depends heavily on the source recording. Dense arrangements, multiple instruments, background noise, sustain-pedal effects, and recordings with significant reverberation can result in incorrect or missing notes.
+Transcription quality depends heavily on the source recording. Dense arrangements, multiple instruments, background noise, sustain-pedal effects, reverberation, and ambiguous note offsets can result in incorrect or missing notes.
 
-The generated MIDI may require manual cleanup before being used as a final piano arrangement.
+In particular, note onset detection and note offset detection are not equally reliable. Some notes may be detected with durations that are shorter or longer than the performed notes.
+
+The generated MIDI may therefore require manual cleanup before being used as a final piano arrangement.
 
 The current API accepts a YouTube URL and returns a MIDI file. It also exposes the YouTube video title through the transcription status endpoint.
 
-It does not yet provide interactive editing, sheet-music generation, playback controls, or MIDI performance feedback.
+It does not yet provide:
+
+* interactive MIDI editing
+* sheet-music generation
+* playback controls
+* MIDI performance feedback
+* automatic correction of transcription errors
+* piano-roll visualization
