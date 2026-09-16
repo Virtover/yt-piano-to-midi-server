@@ -6,6 +6,32 @@ The transcription uses [Transkun](https://github.com/Yujia-Yan/Transkun), a neur
 
 The Transkun checkpoint used by the service detects sustain-pedal events separately rather than extending note durations according to the pedal. This is useful for preserving the distinction between actual key holds and notes sounding under the sustain pedal.
 
+## Android application
+
+This server can be used independently by any client capable of making HTTP requests and downloading MIDI files.
+
+One client using the server is **YT Piano**, an Android application for learning piano songs from YouTube videos.
+
+The application uses the server for the computationally intensive transcription process and provides the user-facing learning experience, including:
+
+* submitting YouTube performances for transcription
+* monitoring transcription progress
+* storing transcribed MIDI files locally
+* interactive piano-roll visualization
+* MIDI playback with a piano sound
+* playback speed control and seeking
+* loop sections for practice
+* transposition
+* wait mode
+* MIDI keyboard support
+
+The Android application is maintained as a separate project:
+
+**[YT Piano](https://github.com/Virtover/yt-piano)**
+
+The server itself does not depend on the Android application and can be integrated with other clients or applications.
+
+
 ## Requirements
 
 * Docker Desktop with Docker Compose and Linux containers enabled
