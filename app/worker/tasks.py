@@ -88,17 +88,18 @@ def transcribe_job(job_id: str, youtube_url: str):
                 progress=str(value),
             )
 
-        def title(value: str):
+        def metadata(value: dict):
             update_job(
                 job_id,
-                title=value,
+                title=value.get("title"),
+                metadata=value,
             )
 
         midi_path = transcribe_youtube(
             youtube_url=youtube_url,
             output_dir=output_dir,
             progress_callback=progress,
-            title_callback=title,
+            metadata_callback=metadata,
         )
 
         update_job(

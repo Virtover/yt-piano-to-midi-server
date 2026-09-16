@@ -2,7 +2,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from app.transcription.piano_transcription import (
     transcribe_piano,
@@ -10,13 +10,13 @@ from app.transcription.piano_transcription import (
 
 
 ProgressCallback = Callable[[float], None]
-TitleCallback = Callable[[str], None]
+MetadataCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass
 class DownloadedAudio:
     path: Path
-    title: str
+    metadata: dict[str, Any]
 
 
 def download_audio(
@@ -103,15 +103,34 @@ def download_audio(
 
     return DownloadedAudio(
         path=wav_path,
-        title=title,
+        metadata={
+            "title": title,
+            "author": info.get("uploader") or info.get("channel"),
+            "channel": info.get("channel"),
+            "channel_id": info.get("channel_id"),
+            "channel_url": info.get("channel_url"),
+            "upload_date": format_upload_date(info.get("upload_date")),
+            "duration": info.get("duration"),
+            "thumbnail": info.get("thumbnail"),
+            "webpage_url": info.get("webpage_url") or youtube_url,
+            "view_count": info.get("view_count"),
+            "like_count": info.get("like_count"),
+        },
     )
+
+
+def format_upload_date(value: str | None) -> str | None:
+    if not value or len(value) != 8 or not value.isdigit():
+        return None
+
+    return f"{value[:4]}-{value[4:6]}-{value[6:]}"
 
 
 def transcribe_youtube(
     youtube_url: str,
     output_dir: Path,
     progress_callback: ProgressCallback | None = None,
-    title_callback: TitleCallback | None = None,
+    metadata_callback: MetadataCallback | None = None,
 ) -> Path:
     output_dir.mkdir(
         parents=True,
@@ -126,10 +145,8 @@ def transcribe_youtube(
         output_dir,
     )
 
-    if title_callback:
-        title_callback(
-            downloaded.title
-        )
+    if metadata_callback:
+        metadata_callback(downloaded.metadata)
 
     midi_path = (
         output_dir

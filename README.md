@@ -98,6 +98,7 @@ The status response contains:
 * `status`
 * `progress` from `0` to `1`
 * `title` — the YouTube video title, once retrieved
+* `metadata` with the available author, channel, upload date, duration, thumbnail, URL, view count, and like count
 * `error` when processing fails
 
 Example:
@@ -108,11 +109,24 @@ Example:
   "status": "processing",
   "progress": 0.42,
   "title": "River Flows in You - Yiruma",
+  "metadata": {
+    "title": "River Flows in You - Yiruma",
+    "author": "Piano Channel",
+    "channel": "Piano Channel",
+    "channel_id": "UC...",
+    "channel_url": "https://www.youtube.com/channel/UC...",
+    "upload_date": "2026-01-25",
+    "duration": 245.0,
+    "thumbnail": "https://i.ytimg.com/vi/.../hqdefault.jpg",
+    "webpage_url": "https://www.youtube.com/watch?v=...",
+    "view_count": 12345,
+    "like_count": 321
+  },
   "error": null
 }
 ```
 
-The title is retrieved during the audio download and may therefore become available while the transcription is still processing.
+Metadata is retrieved during the audio download and may therefore become available while the transcription is still processing. Fields unavailable on YouTube are returned as `null`.
 
 Possible statuses are:
 

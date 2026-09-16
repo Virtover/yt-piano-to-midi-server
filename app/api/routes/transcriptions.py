@@ -1,3 +1,4 @@
+import json
 import uuid
 from pathlib import Path
 
@@ -33,11 +34,26 @@ class CreateTranscriptionResponse(BaseModel):
     status: str
 
 
+class TranscriptionMetadataResponse(BaseModel):
+    title: str
+    author: str | None = None
+    channel: str | None = None
+    channel_id: str | None = None
+    channel_url: str | None = None
+    upload_date: str | None = None
+    duration: float | None = None
+    thumbnail: HttpUrl | None = None
+    webpage_url: HttpUrl | None = None
+    view_count: int | None = None
+    like_count: int | None = None
+
+
 class TranscriptionStatusResponse(BaseModel):
     job_id: str
     status: str
     progress: float = Field(ge=0, le=1)
     title: str | None = None
+    metadata: TranscriptionMetadataResponse | None = None
     error: str | None = None
 
 
@@ -96,11 +112,19 @@ def get_transcription(job_id: str):
     except ValueError:
         progress = 0
 
+    metadata = None
+    if job.get("metadata"):
+        try:
+            metadata = TranscriptionMetadataResponse(**json.loads(job["metadata"]))
+        except (TypeError, ValueError):
+            metadata = None
+
     return TranscriptionStatusResponse(
         job_id=job_id,
         status=job.get("status", "unknown"),
         progress=max(0, min(1, progress)),
         title=job.get("title"),
+        metadata=metadata,
         error=job.get("error"),
     )
 
