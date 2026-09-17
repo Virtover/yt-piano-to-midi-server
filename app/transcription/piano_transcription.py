@@ -91,6 +91,28 @@ def load_model(device: str):
     return model
 
 
+def select_device() -> str:
+    if not torch.cuda.is_available():
+        return "cpu"
+
+    # Jobs share a worker process, so choose a device for each job instead of
+    # relying on CUDA's default device 0.
+    candidates = []
+    for device_index in range(torch.cuda.device_count()):
+        try:
+            free_memory, _ = torch.cuda.mem_get_info(device_index)
+        except RuntimeError:
+            continue
+
+        candidates.append((free_memory, device_index))
+
+    if not candidates:
+        return "cuda:0"
+
+    _, device_index = max(candidates)
+    return f"cuda:{device_index}"
+
+
 def transcribe_audio(
     model,
     audio: np.ndarray,
@@ -348,11 +370,7 @@ def transcribe_piano(
         0.95 - 1.00   MIDI writing
     """
 
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "cpu"
-    )
+    device = select_device()
 
     if progress_callback:
         progress_callback(0.02)

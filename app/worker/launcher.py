@@ -27,17 +27,13 @@ def cpu_count() -> int:
     return max(1, os.cpu_count() or 1)
 
 
-def gpu_capacity() -> tuple[int, int] | None:
+def gpu_capacity() -> tuple[int, int, str] | None:
     try:
         import torch
 
         if not torch.cuda.is_available():
             return None
 
-        device_count = torch.cuda.device_count()
-        # The transcription code currently selects CUDA device 0, so do not
-        # combine memory across GPUs that the model does not use.
-        total_memory = torch.cuda.get_device_properties(0).total_memory
         memory_per_job = int(
             os.environ.get(
                 "WORKER_MEMORY_PER_JOB_GIB",
@@ -47,11 +43,23 @@ def gpu_capacity() -> tuple[int, int] | None:
         if memory_per_job < 1:
             raise ValueError("WORKER_MEMORY_PER_JOB_GIB must be at least 1")
 
-        capacity = max(
-            1,
-            total_memory // (memory_per_job * 1024**3),
+        device_capacities = []
+        for device_index in range(torch.cuda.device_count()):
+            total_memory = torch.cuda.get_device_properties(
+                device_index,
+            ).total_memory
+            capacity = max(
+                1,
+                total_memory // (memory_per_job * 1024**3),
+            )
+            device_capacities.append(int(capacity))
+
+        total_capacity = sum(device_capacities)
+        summary = ", ".join(
+            f"GPU {index}: {capacity} job(s)"
+            for index, capacity in enumerate(device_capacities)
         )
-        return device_count, int(capacity)
+        return len(device_capacities), total_capacity, summary
     except (ImportError, RuntimeError):
         return None
 
@@ -63,11 +71,12 @@ def worker_capacity() -> tuple[int, int, str]:
     configured_max = configured_value("WORKER_MAX_CONCURRENCY")
     gpu = gpu_capacity()
     if gpu:
-        device_count, gpu_capacity_value = gpu
+        device_count, gpu_capacity_value, gpu_summary = gpu
         automatic_capacity = min(cpu_count(), gpu_capacity_value)
         automatic_processes = 1
         resource_summary = (
-            f"{device_count} GPU(s), up to {gpu_capacity_value} job(s) by VRAM"
+            f"{device_count} GPU(s), up to {gpu_capacity_value} job(s) by VRAM "
+            f"({gpu_summary})"
         )
     else:
         automatic_capacity = cpu_count()

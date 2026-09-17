@@ -91,7 +91,7 @@ WORKER_PROCESSES=1
 WORKER_THREADS=4
 ```
 
-You can also tune the automatic GPU estimate with `WORKER_MEMORY_PER_JOB_GIB`; its default is `8`. Set `WORKER_MAX_CONCURRENCY` to an explicit value when you want an operational safety limit; leave it as `auto` to use all detected capacity. Each process loads its own Transkun model, and the current transcription code uses CUDA device 0, so multiple GPUs are not combined automatically. The API accepts jobs immediately and Redis queues any jobs beyond the available worker capacity.
+You can also tune the automatic GPU estimate with `WORKER_MEMORY_PER_JOB_GIB`; its default is `8`. Capacity is calculated independently for each visible GPU, so GPUs with different VRAM sizes are handled correctly. Each transcription chooses the visible GPU with the most free memory when it starts. Set `WORKER_MAX_CONCURRENCY` to an explicit value when you want an operational safety limit; leave it as `auto` to use all detected capacity. The API accepts jobs immediately and Redis queues any jobs beyond the available worker capacity.
 
 Do not commit local secrets or machine-specific values from `.env`.
 
