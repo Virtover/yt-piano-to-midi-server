@@ -44,6 +44,8 @@ Redis stores job state, while generated files are stored in the shared `data` vo
 
 The worker is configured for GPU execution through `gpus: all` in `docker-compose.yml`.
 
+Multiple transcription jobs can run at the same time. By default, the worker automatically chooses concurrency from the available CPU count and CUDA VRAM. On CPU-only systems it can use one job per detected CPU, with no built-in four-job cap. On GPU systems it uses approximately one job per `WORKER_MEMORY_PER_JOB_GIB` GiB of VRAM, also bounded by the available CPU count. Configure `WORKER_PROCESSES` and `WORKER_THREADS` in `.env`; each can be `auto` or an explicit positive integer.
+
 Verify that Docker can access the GPU before starting the stack:
 
 ```powershell
@@ -69,9 +71,27 @@ Keep:
 ```env
 REDIS_URL=redis://redis:6379/0
 DATA_DIR=/data
+WORKER_PROCESSES=auto
+WORKER_THREADS=auto
+WORKER_MAX_CONCURRENCY=auto
 ```
 
 unless the Compose configuration is changed to use different service or volume settings.
+
+For more parallel jobs, run multiple worker containers. For example, this runs two independently auto-sized workers:
+
+```powershell
+docker compose up --build --scale worker=2
+```
+
+To force four threads in one process instead:
+
+```env
+WORKER_PROCESSES=1
+WORKER_THREADS=4
+```
+
+You can also tune the automatic GPU estimate with `WORKER_MEMORY_PER_JOB_GIB`; its default is `8`. Set `WORKER_MAX_CONCURRENCY` to an explicit value when you want an operational safety limit; leave it as `auto` to use all detected capacity. Each process loads its own Transkun model, and the current transcription code uses CUDA device 0, so multiple GPUs are not combined automatically. The API accepts jobs immediately and Redis queues any jobs beyond the available worker capacity.
 
 Do not commit local secrets or machine-specific values from `.env`.
 
@@ -352,6 +372,7 @@ Running the complete stack with Docker is recommended because the worker require
 * `docker-compose.yml` — API, worker, cleanup, Redis, and shared storage
 * `Dockerfile.api` — API container image
 * `Dockerfile.worker` — CUDA-enabled transcription worker image
+* `app/worker/launcher.py` — resource-aware Dramatiq process and thread startup
 
 ## Limitations
 

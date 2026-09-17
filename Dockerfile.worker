@@ -17,4 +17,4 @@ RUN python3 -m pip install --upgrade pip setuptools wheel \
 
 COPY app ./app
 
-CMD ["python3", "-m", "dramatiq", "app.worker.tasks", "--processes", "1", "--threads", "1"]
+CMD ["python3", "-m", "app.worker.launcher"]
