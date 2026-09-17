@@ -6,6 +6,8 @@ The transcription uses [Transkun](https://github.com/Yujia-Yan/Transkun), a neur
 
 The Transkun checkpoint used by the service detects sustain-pedal events separately rather than extending note durations according to the pedal. This is useful for preserving the distinction between actual key holds and notes sounding under the sustain pedal.
 
+YT Piano to MIDI Server is an independent open-source project and is not affiliated with or endorsed by YouTube or Google.
+
 ## Android application
 
 This server can be used independently by any client capable of making HTTP requests and downloading MIDI files.
