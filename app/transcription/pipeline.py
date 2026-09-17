@@ -20,7 +20,7 @@ class DownloadedAudio:
 
 
 def download_audio(
-    youtube_url: str,
+    source_url: str,
     output_dir: Path,
 ) -> DownloadedAudio:
     output_template = str(
@@ -36,7 +36,7 @@ def download_audio(
             "wav",
             "-o",
             output_template,
-            youtube_url,
+            source_url,
         ],
         check=True,
         capture_output=True,
@@ -112,7 +112,7 @@ def download_audio(
             "upload_date": format_upload_date(info.get("upload_date")),
             "duration": info.get("duration"),
             "thumbnail": info.get("thumbnail"),
-            "webpage_url": info.get("webpage_url") or youtube_url,
+            "webpage_url": info.get("webpage_url") or source_url,
             "view_count": info.get("view_count"),
             "like_count": info.get("like_count"),
         },
@@ -126,8 +126,8 @@ def format_upload_date(value: str | None) -> str | None:
     return f"{value[:4]}-{value[4:6]}-{value[6:]}"
 
 
-def transcribe_youtube(
-    youtube_url: str,
+def transcribe_source(
+    source_url: str,
     output_dir: Path,
     progress_callback: ProgressCallback | None = None,
     metadata_callback: MetadataCallback | None = None,
@@ -141,7 +141,7 @@ def transcribe_youtube(
         progress_callback(0.05)
 
     downloaded = download_audio(
-        youtube_url,
+        source_url,
         output_dir,
     )
 

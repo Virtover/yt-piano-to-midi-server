@@ -26,7 +26,7 @@ redis = Redis.from_url(
 
 
 class CreateTranscriptionRequest(BaseModel):
-    youtube_url: HttpUrl
+    source_url: HttpUrl
 
 
 class CreateTranscriptionResponse(BaseModel):
@@ -72,14 +72,14 @@ def create_transcription(
         mapping={
             "status": "queued",
             "progress": "0.0",
-            "youtube_url": str(request.youtube_url),
+            "source_url": str(request.source_url),
         },
     )
 
     try:
         transcribe_job.send(
             job_id,
-            str(request.youtube_url),
+            str(request.source_url),
         )
     except Exception as error:
         redis.delete(job_key(job_id))

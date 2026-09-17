@@ -1,6 +1,6 @@
-# YouTube Piano to MIDI Server
+# YT Piano to MIDI Server
 
-A small FastAPI service that downloads a YouTube piano performance, transcribes it to MIDI asynchronously, and returns the resulting MIDI file.
+A small FastAPI service that downloads a piano performance, transcribes it to MIDI asynchronously, and returns the resulting MIDI file.
 
 The transcription uses [Transkun](https://github.com/Yujia-Yan/Transkun), a neural audio-to-MIDI transcription model with GPU acceleration through PyTorch/CUDA.
 
@@ -10,11 +10,11 @@ The Transkun checkpoint used by the service detects sustain-pedal events separat
 
 This server can be used independently by any client capable of making HTTP requests and downloading MIDI files.
 
-One client using the server is **YT Piano**, an Android application for learning piano songs from YouTube videos.
+One client using the server is **YT Piano**, an Android application for learning piano songs from online videos.
 
 The application uses the server for the computationally intensive transcription process and provides the user-facing learning experience, including:
 
-* submitting YouTube performances for transcription
+* submitting online performances for transcription
 * monitoring transcription progress
 * storing transcribed MIDI files locally
 * interactive piano-roll visualization
@@ -36,7 +36,7 @@ The server itself does not depend on the Android application and can be integrat
 
 * Docker Desktop with Docker Compose and Linux containers enabled
 * NVIDIA drivers and NVIDIA Container Toolkit, if using the GPU configuration
-* A public YouTube URL containing an audio or piano performance
+* A public video URL containing an audio or piano performance
 
 The transcription worker needs `ffmpeg`, which is included in the worker image.
 
@@ -120,7 +120,7 @@ $job = Invoke-RestMethod `
   -Method Post `
   -Uri http://localhost:8000/api/transcriptions `
   -ContentType 'application/json' `
-  -Body '{"youtube_url":"https://www.youtube.com/watch?v=VIDEO_ID"}'
+  -Body '{"source_url":"https://www.youtube.com/watch?v=VIDEO_ID"}'
 
 $job
 ```
@@ -129,7 +129,7 @@ The endpoint returns `202 Accepted` with a `job_id` and an initial `queued` stat
 
 The URL must be an HTTP(S) URL.
 
-The worker downloads the audio, retrieves the YouTube video title, and runs Transkun. Processing time depends on the track length and available hardware.
+The worker downloads the audio, retrieves the source video title, and runs Transkun. Processing time depends on the track length and available hardware.
 
 ### Poll status
 
@@ -143,7 +143,7 @@ The status response contains:
 * `job_id`
 * `status`
 * `progress` from `0` to `1`
-* `title` — the YouTube video title, once retrieved
+* `title` — the source video title, once retrieved
 * `metadata` with the available author, channel, upload date, duration, thumbnail, URL, view count, and like count
 * `error` when processing fails
 
@@ -172,7 +172,7 @@ Example:
 }
 ```
 
-Metadata is retrieved during the audio download and may therefore become available while the transcription is still processing. Fields unavailable on YouTube are returned as `null`.
+Metadata is retrieved during the audio download and may therefore become available while the transcription is still processing. Fields unavailable in the source metadata are returned as `null`.
 
 Possible statuses are:
 
@@ -249,8 +249,8 @@ The API, worker, and cleanup service must use the same `DATA_DIR`.
 
 The transcription pipeline consists of:
 
-1. Downloading the audio from YouTube using `yt-dlp`
-2. Extracting the YouTube video title
+1. Downloading the source audio using `yt-dlp`
+2. Extracting the source video title
 3. Converting the audio to WAV
 4. Running Transkun
 5. Writing the resulting MIDI file
@@ -367,7 +367,7 @@ Running the complete stack with Docker is recommended because the worker require
 * `app/api/routes/transcriptions.py` — job creation, status polling, and MIDI download
 * `app/worker/tasks.py` — Dramatiq transcription task and Redis job state
 * `app/worker/cleanup.py` — periodic cleanup process
-* `app/transcription/pipeline.py` — YouTube audio download, metadata retrieval, and transcription pipeline
+* `app/transcription/pipeline.py` — source audio download, metadata retrieval, and transcription pipeline
 * `app/transcription/piano_transcription.py` — Transkun integration
 * `docker-compose.yml` — API, worker, cleanup, Redis, and shared storage
 * `Dockerfile.api` — API container image
@@ -384,7 +384,7 @@ In particular, note onset detection and note offset detection are not equally re
 
 The generated MIDI may therefore require manual cleanup before being used as a final piano arrangement.
 
-The current API accepts a YouTube URL and returns a MIDI file. It also exposes the YouTube video title through the transcription status endpoint.
+The current API accepts a source video URL and returns a MIDI file. It also exposes the source video title through the transcription status endpoint.
 
 It does not yet provide:
 
