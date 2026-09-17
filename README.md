@@ -1,4 +1,4 @@
-# YT Piano to MIDI Server
+# Piano Transcription Server
 
 A small FastAPI service that downloads a piano performance, transcribes it to MIDI asynchronously, and returns the resulting MIDI file.
 
@@ -6,13 +6,13 @@ The transcription uses [Transkun](https://github.com/Yujia-Yan/Transkun), a neur
 
 The Transkun checkpoint used by the service detects sustain-pedal events separately rather than extending note durations according to the pedal. This is useful for preserving the distinction between actual key holds and notes sounding under the sustain pedal.
 
-YT Piano to MIDI Server is an independent open-source project and is not affiliated with or endorsed by YouTube or Google.
+Piano Transcription Server is an independent open-source project.
 
 ## Android application
 
 This server can be used independently by any client capable of making HTTP requests and downloading MIDI files.
 
-One client using the server is **YT Piano**, an Android application for learning piano songs from online videos.
+One client using the server is **PianoWeave**, an Android application for learning piano songs from online videos.
 
 The application uses the server for the computationally intensive transcription process and provides the user-facing learning experience, including:
 
@@ -29,10 +29,9 @@ The application uses the server for the computationally intensive transcription 
 
 The Android application is maintained as a separate project:
 
-**[YT Piano](https://github.com/Virtover/yt-piano)**
+**[PianoWeave](https://github.com/Virtover/pianoweave)**
 
 The server itself does not depend on the Android application and can be integrated with other clients or applications.
-
 
 ## Requirements
 
@@ -72,9 +71,13 @@ Keep:
 
 ```env
 REDIS_URL=redis://redis:6379/0
+
 DATA_DIR=/data
+
 WORKER_PROCESSES=auto
+
 WORKER_THREADS=auto
+
 WORKER_MAX_CONCURRENCY=auto
 ```
 
@@ -90,6 +93,7 @@ To force four threads in one process instead:
 
 ```env
 WORKER_PROCESSES=1
+
 WORKER_THREADS=4
 ```
 
@@ -122,7 +126,7 @@ $job = Invoke-RestMethod `
   -Method Post `
   -Uri http://localhost:8000/api/transcriptions `
   -ContentType 'application/json' `
-  -Body '{"source_url":"https://www.youtube.com/watch?v=VIDEO_ID"}'
+  -Body '{"source_url":"https://example.com/video"}'
 
 $job
 ```
@@ -162,11 +166,11 @@ Example:
     "author": "Piano Channel",
     "channel": "Piano Channel",
     "channel_id": "UC...",
-    "channel_url": "https://www.youtube.com/channel/UC...",
+    "channel_url": "https://example.com/channel/UC...",
     "upload_date": "2026-01-25",
     "duration": 245.0,
-    "thumbnail": "https://i.ytimg.com/vi/.../hqdefault.jpg",
-    "webpage_url": "https://www.youtube.com/watch?v=...",
+    "thumbnail": "https://example.com/thumbnail.jpg",
+    "webpage_url": "https://example.com/video",
     "view_count": 12345,
     "like_count": 321
   },
@@ -346,7 +350,7 @@ Running the complete stack with Docker is recommended because the worker require
                            │ Dramatiq
                            ▼
                     ┌──────────────┐
-                    │    Worker    │
+                    │   Worker     │
                     │ Transkun/CUDA│
                     └──────┬───────┘
                            │
